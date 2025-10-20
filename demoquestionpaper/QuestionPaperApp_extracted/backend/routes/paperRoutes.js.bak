@@ -1,0 +1,85 @@
+const express = require('express');
+const router = express.Router();
+const Question = require('../models/Question');
+const Teacher = require('../models/Teacher');
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'replace_this_with_a_secret';
+
+function auth(req, res, next){
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ message: 'Unauthorized' });
+  const token = header.split(' ')[1];
+  try {
+    const data = jwt.verify(token, JWT_SECRET);
+    req.user = data;
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: 'Invalid token' });
+  }
+}
+
+// check if all 5 teachers have submitted
+router.get('/can-generate', auth, async (req, res) => {
+  const teachers = await Teacher.find({});
+  if (teachers.length < 5) return res.json({ canGenerate: false, reason: 'Less than 5 teachers registered' });
+  const all = teachers.every(t => t.hasSubmitted);
+  res.json({ canGenerate: all });
+});
+
+// generate paper (simple greedy selection to match format)
+router.get('/generate', auth, async (req, res) => {
+  const teachers = await Teacher.find({});
+  if (teachers.length < 5) return res.status(400).json({ message: 'Need 5 teachers registered' });
+  const allSubmitted = teachers.every(t => t.hasSubmitted);
+  if (!allSubmitted) return res.status(400).json({ message: 'All teachers must submit first' });
+
+  const allQuestions = await Question.find({});
+  // Sections:
+  // A: 10 questions x 2 marks = 20
+  // B: 3 questions each made of (5+5+2) = total 10 each -> so pick three questions that sum to 10 but we will accept questions with marks 5,5,2 separately
+  // For simplicity we'll pick:
+  const sectionA = allQuestions.filter(q => q.marks === 2).slice(0,10);
+  // For B, try to find triples 5,5,2 per question (we'll assemble as groups)
+  const fives = allQuestions.filter(q => q.marks === 5);
+  const twos = allQuestions.filter(q => q.marks === 2 && !sectionA.includes(q)); // remaining 2-mark
+  // Build three B items
+  const sectionB = [];
+  for (let i=0;i<3;i++){
+    const a = fives[i*2];
+    const b = fives[i*2+1];
+    const c = twos[i];
+    if (a && b && c) sectionB.push([a,b,c]);
+  }
+  // Section C: 3 questions each made of two 5-mark parts (we can group pairs of 5s)
+  const sectionC = [];
+  const start = 6; // after using some fives above (very naive)
+  for (let i=0;i<3;i++){
+    const x = fives[start + i*2];
+    const y = fives[start + i*2 +1];
+    if (x && y) sectionC.push([x,y]);
+  }
+
+  // Build a simple HTML view
+  let html = '<!doctype html><html><head><meta charset="utf-8"><title>Question Paper</title></head><body>';
+  html += '<h2>SECTION A (20 marks) - 10 questions x 2 marks</h2><ol>';
+  sectionA.forEach(q=> html += `<li>${q.questionText} <strong>(${q.marks}m)</strong></li>`);
+  html += '</ol>';
+  html += '<h2>SECTION B (30 marks) - 3 questions (5+5+2 each)</h2><ol>';
+  sectionB.forEach((grp, idx)=> {
+    html += `<li>Q${idx+1}:<ul>`;
+    grp.forEach(g=> html += `<li>${g.questionText} (${g.marks}m)</li>`);
+    html += '</ul></li>`;
+  });
+  html += '</ol>';
+  html += '<h2>SECTION C (30 marks) - 3 questions (5+5 each)</h2><ol>';
+  sectionC.forEach((grp, idx)=> {
+    html += `<li>Q${idx+1}:<ul>`;
+    grp.forEach(g=> html += `<li>${g.questionText} (${g.marks}m)</li>`);
+    html += '</ul></li>`;
+  });
+  html += '</ol></body></html>';
+  res.send(html);
+});
+
+module.exports = router;
