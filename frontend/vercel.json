@@ -1,0 +1,5 @@
+{
+  "buildCommand": "npm install && npm run build",
+  "outputDirectory": "build",
+  "installCommand": "npm install && chmod -R +x node_modules/.bin"
+}
